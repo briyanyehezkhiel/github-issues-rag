@@ -1,0 +1,12 @@
+pandas
+numpy
+nltk
+beautifulsoup4
+sentence-transformers
+faiss-cpu
+transformers
+accelerate
+sentencepiece
+torch
+gradio
+scikit-learn
