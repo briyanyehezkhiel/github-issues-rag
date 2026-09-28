@@ -1,20 +1,21 @@
 # Hybrid Retrieval-Augmented Generation (RAG) for Factual Solution Generation on GitHub Issues Using Sentence-BERT
 
-A hybrid Retrieval-Augmented Generation (RAG) system for retrieving relevant GitHub Issues and generating concise, issue-level summaries using semantic retrieval, CrossEncoder reranking, and FLAN-T5.
+A Retrieval-Augmented Generation (RAG) system for retrieving relevant GitHub Issues and generating concise, issue-level technical summaries using semantic retrieval, CrossEncoder reranking, and FLAN-T5.
 
 ## Overview
 
-This project implements a RAG pipeline designed to retrieve technical issues from a GitHub Issues dataset and generate responses grounded in the retrieved issue context.
+This project implements a RAG pipeline designed to help users find relevant solutions to technical problems documented in GitHub Issues.
 
 The system combines:
 
-- Sentence-BERT for semantic query encoding and dense retrieval
-- FAISS for efficient vector similarity search
+- Fine-tuned Sentence-BERT for semantic query encoding and dense retrieval
+- FAISS for vector similarity search
 - CrossEncoder for candidate reranking
-- FLAN-T5 for response generation
-- Gradio for a simple interactive interface
+- Issue-level selection and context construction
+- FLAN-T5 for generating factual technical summaries
+- Gradio for an interactive web interface
 
-The project was developed as an undergraduate thesis project.
+The project was developed as an undergraduate thesis project in Computer Science.
 
 ## System Pipeline
 
@@ -23,14 +24,17 @@ flowchart LR
     A[User Query] --> B[Query Normalization]
     B --> C[Sentence-BERT]
     C --> D[FAISS Dense Retrieval]
-    D --> E[Top 80 Candidates]
+    D --> E[Candidate Retrieval]
     E --> F[CrossEncoder Reranking]
-    F --> G[Issue Selection]
-    G --> H[Context Construction]
-    H --> I[FLAN-T5]
-    I --> J[Generated Summary]
-    J --> K[GitHub Issue References]
+    F --> G[Metadata Boosting]
+    G --> H[Issue-Level Selection]
+    H --> I[Context Construction]
+    I --> J[FLAN-T5]
+    J --> K[Generated Summary]
+    K --> L[GitHub Issue References]
 ```
+
+The pipeline follows a retrieve-rerank-generate approach. The retrieval stage identifies semantically relevant issue content, the reranking stage refines the candidate ranking, and the generation stage produces a concise summary from the selected issue context.
 
 ## Dataset
 
@@ -38,11 +42,11 @@ The system uses the GitHub Issues dataset provided in the companion repository:
 
 [github-issues-dataset](https://github.com/briyanyehezkhiel/github-issues-dataset)
 
-The dataset contains GitHub issue information, including issue titles, bodies, answers, repository information, labels, and related metadata.
+The dataset contains GitHub issue information including titles, issue bodies, answers, repository information, labels, and related metadata.
 
 ### Dataset Processing
 
-The notebook performs the following filtering steps:
+The notebook performs the following processing steps:
 
 1. Load the GitHub Issues dataset from the release file.
 2. Keep closed issues.
@@ -53,10 +57,10 @@ The notebook performs the following filtering steps:
    - `question`
    - `technical`
    - `help wanted`
-4. Extract issues that contain answers.
+4. Keep issues that contain answers.
 5. Construct retrieval documents from issue bodies and answer chunks.
 
-Dataset sizes recorded in the notebook:
+Dataset sizes recorded during the project:
 
 | Stage | Records |
 |---|---:|
@@ -70,26 +74,45 @@ Dataset sizes recorded in the notebook:
 The preprocessing pipeline includes:
 
 - HTML cleaning with BeautifulSoup
-- Code block replacement
+- Code block replacement/truncation
 - Text normalization
 - Whitespace normalization
 - Sentence-based chunking
 - Chunking with a maximum of 150 words
 
-The retrieval corpus contains both:
+The retrieval corpus contains two main document types:
 
 - `issue_body`
 - `issue_answer`
 
-Each corpus entry is associated with metadata such as issue ID, title, URL, repository, type, likes, and label.
+Each corpus entry is associated with metadata such as issue ID, title, URL, repository, document type, likes, and label.
+
+## Sentence-BERT Fine-Tuning
+
+Sentence-BERT is fine-tuned to improve semantic retrieval for technical GitHub Issues.
+
+The research uses `all-MiniLM-L6-v2` as the base model and trains it using pairs consisting of an issue title and its corresponding answer/solution.
+
+The fine-tuning configuration includes:
+
+| Parameter | Value |
+|---|---|
+| Base model | `all-MiniLM-L6-v2` |
+| Training samples | 5,000 |
+| Batch size | 32 |
+| Epochs | 1 |
+| Warmup steps | 100 |
+| Loss function | `MultipleNegativesRankingLoss` |
+
+The resulting model is then used to generate embeddings for both the retrieval corpus and user queries.
 
 ## Dense Retrieval
 
-The query is normalized and encoded using a trained Sentence-BERT model.
+The normalized query is encoded using the fine-tuned Sentence-BERT model.
 
-FAISS is then used to retrieve semantically similar candidates based on normalized embedding vectors.
+FAISS is used to perform dense vector similarity search and retrieve candidate chunks from the corpus.
 
-For the final RAG pipeline, the system retrieves up to 80 candidates before reranking.
+The FAISS index uses normalized embeddings with inner-product similarity.
 
 ## CrossEncoder Reranking
 
@@ -99,28 +122,34 @@ The retrieved candidates are reranked using:
 cross-encoder/ms-marco-MiniLM-L-6-v2
 ```
 
-The CrossEncoder evaluates query-document pairs and produces relevance scores. The highest-scoring candidates are retained for the subsequent issue-level context construction.
+The CrossEncoder evaluates query-document pairs directly and produces relevance scores for the retrieved candidates.
+
+## Metadata Boosting
+
+The research pipeline also applies metadata-based score adjustment using GitHub reaction information.
+
+Positive reactions such as:
+
+- `plus_1`
+- `heart`
+- `rocket`
+- `hooray`
+
+can increase the score, while `minus_1` contributes a penalty.
+
+This step is applied as an additional ranking signal before issue-level selection.
 
 ## Issue-Level Context Construction
 
-Instead of directly generating an answer from individual chunks, the system groups retrieved chunks by issue.
+Retrieved chunks are grouped by their original GitHub Issue rather than being treated only as independent text chunks.
 
 The selected issue context can contain:
 
 - Issue description
-- Relevant discussion
-- Additional answer/discussion chunks
+- Relevant answer/discussion chunks
+- Supporting information from the same issue
 
-The pipeline limits the number of selected issues and chunks to keep the generation context manageable.
-
-The system also performs lightweight query-intent detection for categories such as:
-
-- Infrastructure
-- Network
-- UI
-- Mixed
-
-This helps filter issue contexts before generation.
+The system then constructs and compresses the selected context so that it can be processed by the generation model.
 
 ## Generation
 
@@ -130,15 +159,28 @@ The generation component uses:
 google/flan-t5-large
 ```
 
-The selected issue context is compressed and converted into a generation prompt before being passed to FLAN-T5.
+FLAN-T5 generates a technical summary from the selected GitHub Issue context.
 
-Generation uses deterministic decoding with beam search and additional controls for repetition and output length.
+The generation configuration uses deterministic decoding with beam search and controls for repetition and output length.
 
-The generated output is cleaned before being returned to the user.
+The research configuration includes:
+
+| Parameter | Value |
+|---|---|
+| Model | FLAN-T5-Large |
+| Maximum input length | 1024 tokens |
+| Maximum new tokens | 120 |
+| Beam size | 4 |
+| Sampling | Disabled |
+| Repetition penalty | 1.2 |
+| No-repeat n-gram size | 4 |
+| Length penalty | 1.1 |
+
+The generator is used to summarize information retrieved from GitHub Issues rather than to generate an unrestricted answer independently of the retrieved context.
 
 ## Retrieval Evaluation
 
-The notebook contains implementations for the following retrieval metrics:
+The project evaluates retrieval using:
 
 - Accuracy@1
 - MRR@10
@@ -146,25 +188,41 @@ The notebook contains implementations for the following retrieval metrics:
 - Recall@5
 - Recall@10
 
-Two evaluation approaches are implemented:
-
 ### Basic Retrieval Evaluation
 
-The basic evaluation samples up to 300 dataset records and uses the issue title as the query.
+The basic evaluation uses issue titles as queries to measure retrieval performance on sampled dataset records.
 
 ### Gold Query Evaluation
 
-A separate gold-query evaluation pipeline is implemented using manually written user-style queries associated with target issue IDs.
+A separate gold-query evaluation uses manually written user-style queries associated with target issue IDs.
 
-The notebook includes functions for calculating Accuracy@1, MRR@10, nDCG@5, and Recall@K on this gold-query set.
+The gold-query evaluation measures:
 
-> Note: The current GitHub notebook retains the evaluation implementation, but the final printed metric values are not stored in the notebook outputs. Therefore, this README does not reproduce numeric evaluation scores that cannot be verified directly from the uploaded notebook.
+- Accuracy@1
+- MRR@10
+- nDCG@5
+- Recall@5
+- Recall@10
+
+The gold queries are designed to represent technical problems in a more natural form than directly using issue titles.
+
+## End-to-End RAG Evaluation
+
+The end-to-end RAG evaluation covers:
+
+- Latency
+- Coverage
+- Faithfulness / Hallucination Rate
+- BLEU
+- ROUGE
+
+The repository does not reproduce numeric evaluation results that are not stored in the notebook outputs.
 
 ## Interactive Interface
 
-A Gradio interface is included for testing the RAG pipeline.
+A Gradio interface is included for testing the complete RAG pipeline.
 
-Example queries used in the notebook include:
+Example queries used with the interface include:
 
 ```text
 http 403 websocket issue
@@ -172,22 +230,15 @@ connection reset by peer
 windows socket stack problem
 ```
 
-The interface returns:
+The interface accepts a technical query and displays:
 
-- Retrieved issue title
-- Generated summary
+- Retrieved GitHub Issues
+- Issue titles
+- Generated summaries
 - GitHub issue references
-- Runtime
+- Runtime information
 
-## Example Output
-
-For the example query:
-
-```text
-web socket error
-```
-
-the notebook retrieves issues related to WebSocket and socket errors and generates issue-level summaries with references to the corresponding GitHub Issues.
+![GitHub Issue RAG Chatbot](https://github.com/user-attachments/assets/cbc777ed-7f64-4fd3-8a12-45d457d9c0fe)
 
 ## Technologies
 
@@ -203,6 +254,7 @@ the notebook retrieves issues related to WebSocket and socket errors and generat
 - FLAN-T5
 - PyTorch
 - Gradio
+- Scikit-learn
 - Google Colab
 
 ## Project Structure
@@ -210,22 +262,13 @@ the notebook retrieves issues related to WebSocket and socket errors and generat
 ```text
 github-issues-rag/
 ├── README.md
-└── RAG_GitHub_Issues.ipynb
+├── RAG_GitHub_Issues.ipynb
+└── requirements.txt
 ```
 
-The notebook contains the complete experimental and inference workflow.
+The notebook contains the main experimental and inference workflow.
 
-For local execution, the notebook expects the trained Sentence-BERT model and retrieval artifacts to be available under:
-
-```text
-artifacts/
-├── sbert_epoch_1/
-├── best_faiss.index
-├── corpus.pkl
-└── metadata.pkl
-```
-
-These artifacts are not included in this repository.
+The inference workflow also uses trained model and retrieval artifacts that are kept separately from this repository, including the trained Sentence-BERT model, FAISS index, corpus, and metadata.
 
 ## How to Run
 
@@ -241,40 +284,40 @@ in Google Colab or a compatible Jupyter environment.
 
 ### 2. Install dependencies
 
-The notebook installs the main dependencies required for the pipeline, including:
+Install the dependencies listed in:
 
 ```text
-transformers
-accelerate
-sentencepiece
-sentence-transformers
-faiss
-nltk
-beautifulsoup4
-gradio
+requirements.txt
 ```
+
+The project uses libraries for data processing, NLP preprocessing, Sentence-BERT, FAISS, CrossEncoder reranking, FLAN-T5 generation, and Gradio.
 
 A GPU-enabled environment is recommended for running the trained models and generation stage.
 
-### 3. Prepare the artifacts
+### 3. Prepare the trained artifacts
 
-Place the required trained model and retrieval artifacts in:
+The inference workflow requires the trained Sentence-BERT model and retrieval artifacts used by the notebook.
 
-```text
-artifacts/
-```
-
-as described in the Project Structure section.
+These artifacts are not included in this repository. The notebook is provided as the main reference for the experimental and inference workflow.
 
 ### 4. Run the notebook
 
-Execute the cells in order to load the dataset, prepare the retrieval pipeline, perform reranking, generate summaries, and launch the Gradio interface.
+Execute the notebook cells in order to:
+
+1. Load and preprocess the dataset.
+2. Prepare the retrieval corpus.
+3. Load the trained Sentence-BERT model.
+4. Perform FAISS retrieval.
+5. Rerank candidates using CrossEncoder.
+6. Select relevant issues and construct context.
+7. Generate technical summaries using FLAN-T5.
+8. Launch the Gradio interface.
 
 ## Project Context
 
 This project was developed as an undergraduate thesis in Computer Science.
 
-The research focuses on using Retrieval-Augmented Generation to provide factual, context-grounded solutions for technical problems represented in GitHub Issues.
+The research focuses on using Retrieval-Augmented Generation to help users find relevant GitHub Issues and understand technical solutions through concise, context-grounded summaries.
 
 The complete workflow covers:
 
@@ -283,13 +326,15 @@ Data Filtering
     ↓
 Text Preprocessing
     ↓
-Corpus Construction
+Sentence-BERT Fine-Tuning
     ↓
-Sentence-BERT Retrieval
+Retrieval Corpus Construction
     ↓
-FAISS Search
+FAISS Dense Retrieval
     ↓
 CrossEncoder Reranking
+    ↓
+Metadata-Based Ranking
     ↓
 Issue-Level Context Construction
     ↓
@@ -298,12 +343,24 @@ FLAN-T5 Generation
 Generated Summary + References
 ```
 
+## Companion Dataset
+
+The dataset used by this project is maintained separately:
+
+[github-issues-dataset](https://github.com/briyanyehezkhiel/github-issues-dataset)
+
+The dataset repository contains the release files used by the project and is kept separate from the RAG implementation.
+
+## Google Colab
+
+The original notebook is also available in Google Colab:
+
+[Open the RAG notebook in Google Colab](https://colab.research.google.com/drive/1ETBEArIFsMs4JJolQgKw_08oPqaTjwVU?usp=sharing)
+
 ## Note
 
 This repository contains the research notebook and supporting documentation for the RAG project.
 
-The dataset is maintained separately in the companion repository:
+The trained model and retrieval artifacts are not included in the repository. The companion dataset is maintained separately.
 
-[github-issues-dataset](https://github.com/briyanyehezkhiel/github-issues-dataset)
-
-[Github-Issues-RAG](https://colab.research.google.com/drive/1ETBEArIFsMs4JJolQgKw_08oPqaTjwVU?usp=sharing)
+The project was developed for academic research and portfolio documentation.
