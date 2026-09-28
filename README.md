@@ -305,3 +305,5 @@ This repository contains the research notebook and supporting documentation for 
 The dataset is maintained separately in the companion repository:
 
 [github-issues-dataset](https://github.com/briyanyehezkhiel/github-issues-dataset)
+
+[Github-Issues-RAG](https://colab.research.google.com/drive/1ETBEArIFsMs4JJolQgKw_08oPqaTjwVU?usp=sharing)
